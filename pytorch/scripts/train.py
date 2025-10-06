@@ -354,7 +354,7 @@ def main(net,args):
     if is_rank0():
         mlflow.set_tracking_uri(args.mlflow_uri)
         mlflow.set_experiment(args.mlflow_experiment)
-        parent_run = mlflow.start_run(run_name=args.mlflow_run_group)
+        parent_run = mlflow.start_run(run_name=args.mlflow_run_group, log_system_metrics=True)
         # tags for traceability (great on SLURM)
         mlflow.set_tags({
             "slurm.job_id": os.environ.get("SLURM_JOBID"),

@@ -79,7 +79,7 @@ mlflow.set_experiment(args.mlflow_experiment)
 # 5. Train the Model
 # -------------------------------
 # This runs the training loop according to the configuration provided.
-with mlflow.start_run(run_name=args.mlflow_run_group) as run:
+with mlflow.start_run(run_name=args.mlflow_run_group, log_system_metrics=True) as run:
     trainer.train()
 
 # -------------------------------
