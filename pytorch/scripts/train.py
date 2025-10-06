@@ -352,9 +352,9 @@ def main(net,args):
     # ----- MLflow parent run (rank 0 only) -----
     parent_run = None
     if is_rank0():
-        exp_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", "default")
-        mlflow.set_experiment(exp_name)
-        parent_run = mlflow.start_run(run_name=os.environ.get("MLFLOW_RUN_GROUP"))
+        mlflow.set_tracking_uri(args.mlflow_uri)
+        mlflow.set_experiment(args.mlflow_experiment)
+        parent_run = mlflow.start_run(run_name=args.mlflow_run_group)
         # tags for traceability (great on SLURM)
         mlflow.set_tags({
             "slurm.job_id": os.environ.get("SLURM_JOBID"),
@@ -413,6 +413,10 @@ if __name__ == '__main__':
                         help="Momentum", type=float)
     parser.add_argument("--print-interval", default=100,
                         help="Momentum", type=int)
+    parser.add_argument("--mlflow_uri", type=str, required=True, help="MLflow tracking server URI")
+    parser.add_argument("--mlflow_experiment", type=str, required=True, help="MLflow experiment name")
+    parser.add_argument("--mlflow_run_group", type=str, required=True, help="MLflow run group")
+
     args = parser.parse_args()
  
     main(net,args)

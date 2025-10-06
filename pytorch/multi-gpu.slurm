@@ -1,11 +1,12 @@
 #!/bin/bash
 
+#SBATCH --job-name=resnet-multi-gpu
 #SBATCH --gpus=4
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks=1
 #SBATCH --tasks-per-node=1
 #SBATCH --cpus-per-task=15
-#SBATCH --time=00:10:00
+#SBATCH --time=02:00:00
 #SBATCH --constraint=v100
 
 scontrol show job $SLURM_JOBID 
@@ -15,11 +16,32 @@ conda activate mlflow+pytorch
 
 
 # === MLflow wiring ===
-# If your cluster lets compute nodes reach the MLflow-UI node directly:
-export MLFLOW_TRACKING_URI="http://10.109.75.146:5000"
+# === Where mlflow-server writes the URI ===
+PUBLISH_DIR="${PUBLISH_DIR:-$SLURM_SUBMIT_DIR/.mlflow}"   # adjust if server uses a different path
+URI_FILE="$PUBLISH_DIR/current_uri.txt"
 
-export MLFLOW_EXPERIMENT_NAME="resnet-ddp"
-export MLFLOW_RUN_GROUP="${SLURM_JOB_NAME}-${SLURM_JOB_ID}"
+# Wait until the server has written the file
+for i in {1..60}; do
+  if [[ -f "$URI_FILE" ]]; then
+    break
+  fi
+  echo "Waiting for MLflow URI in $URI_FILE ..."
+  sleep 2
+done
+
+if [[ ! -f "$URI_FILE" ]]; then
+  echo "ERROR: Could not find MLflow URI file ($URI_FILE)"
+  exit 1
+fi
+
+MLFLOW_URI="$(cat "$URI_FILE")"
+
+echo "Using MLflow Tracking URI: $MLFLOW_URI"
+
+# Set defaults for experiment + run group if not passed
+: "${MLFLOW_EXPERIMENT_NAME:=imagenet-ddp}"
+: "${MLFLOW_RUN_GROUP:=${SLURM_JOB_NAME}-${SLURM_JOB_ID}}"
+
 
 
 export NCCL_DEBUG=INFO
@@ -39,16 +61,9 @@ master_ip=$(srun -n 1 -N 1 --gpus=1 -w ${head_node} /bin/hostname -I | cut -d " 
 master_port=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
 echo "head node is ${master_ip}:${master_port}"
 
-#nv_board=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
-
-#nvdashboard ${nv_board} &
 sleep 5
 
-echo -e " 
-To connect to the NVIDIA Dashboard and monitor your GPU utilzation do the following:
-Copy the following command and paste in new terminal:
-ssh -L localhost:${nv_board}:${HOSTNAME}.ibex.kaust.edu.sa:${nv_board} ${USER}@glogin.ibex.kaust.edu.sa 
-"
+
 export OMP_NUM_THREADS=1
 for (( i=0; i< ${SLURM_NNODES}; i++ ))
 do
@@ -56,7 +71,9 @@ do
       python -m torch.distributed.launch --use_env \
      --nproc_per_node=${SLURM_GPUS_PER_NODE} --nnodes=${SLURM_NNODES} --node_rank=${i} \
      --master_addr=${master_ip} --master_port=${master_port} \
-     scripts/train.py --epochs=5 --lr=0.001 --num-workers=${SLURM_CPUS_PER_TASK} --batch-size=64 &
+     scripts/train.py --epochs=5 --lr=0.001 --num-workers=${SLURM_CPUS_PER_TASK} --batch-size=64 \
+      --mlflow_uri "$MLFLOW_URI" \
+      --mlflow_experiment "$MLFLOW_EXPERIMENT_NAME" --mlflow_run_group "$MLFLOW_RUN_GROUP" &
      
 done
 wait
