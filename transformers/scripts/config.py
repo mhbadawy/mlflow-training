@@ -21,6 +21,11 @@ parser.add_argument(
     help="Path to DeepSpeed config JSON file"
 )
 
+
+parser.add_argument("--mlflow_uri", type=str, required=True, help="MLflow tracking server URI")
+parser.add_argument("--mlflow_experiment", type=str, required=True, help="MLflow experiment name")
+parser.add_argument("--mlflow_run_group", type=str, required=True, help="MLflow run group")
+
 # Parse the arguments into a namespace object called `args`
 args = parser.parse_args()
 

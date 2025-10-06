@@ -212,3 +212,8 @@ dcgm/
 logs/
 mlartifacts/
 bloom-*
+*.out
+.mlflow/
+mlruns/
+cpu_memory/
+gpu_memory/

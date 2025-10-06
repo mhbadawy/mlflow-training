@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=baseline-bloom-finetune     # Name of the job shown in SLURM queue
+#SBATCH --job-name=bloom-finetune     	       # Name of the job shown in SLURM queue
 #SBATCH --ntasks=1                             # Number of tasks
 #SBATCH --tasks-per-node=1                     # One task per node
 #SBATCH --cpus-per-task=4                      # Number of CPUs allocated per task
@@ -7,15 +7,24 @@
 #SBATCH --gpus-per-node=1                      # GPUs per node
 #SBATCH --mem=32G                              # Request 32 GB of system memory
 #SBATCH --constraint=v100                      # Request specific GPU type (V100)
-#SBATCH --time=12:00:00                        # Maximum runtime (HH:MM:SS)
+#SBATCH --time=02:00:00                        # Maximum runtime (HH:MM:SS)
 #SBATCH --output=log/%x-%j.out                 # Redirect SLURM .out log to log/ directory
+
+
+# Fail fast + clean up any background processes when exiting
+set -Eeuo pipefail
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  kill -- -$$ 2>/dev/null || true   # kill whole process group (e.g., mlflow ui, loggers)
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
 
 # ------------------------------
 # Resolve directory paths
 # ------------------------------
 SCRIPT_DIR=$(pwd)
-
-#cd "$SCRIPT_DIR/../.."   # → Go to project root: Dist-DL-training/deepspeed
 
 JOB_ID=${SLURM_JOB_ID:-manual}
 EXPERIMENT_DIR="$SCRIPT_DIR"
@@ -74,7 +83,6 @@ GPU_LOG_PID=$!
 # ------------------------------
 # Launch Training
 # ------------------------------
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python scripts/train.py \
   --mlflow_uri "$MLFLOW_URI" \
   --mlflow_experiment "$MLFLOW_EXPERIMENT_NAME"  \
@@ -92,7 +100,7 @@ CPU_LOG_PID=$!
 # ------------------------------
 # Wait & Cleanup
 # ------------------------------
-wait $TRAIN_PID
+#wait $TRAIN_PID
 kill $GPU_LOG_PID
 kill $CPU_LOG_PID
 

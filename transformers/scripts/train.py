@@ -1,7 +1,7 @@
 from transformers import Trainer, DataCollatorForLanguageModeling
 from model import load_model, save_model
 from data_loader import load_squad
-from config import TRAINING_ARGS
+from config import TRAINING_ARGS, args
 import torch
 import torch.distributed as dist
 import os
@@ -58,6 +58,7 @@ tokenized_datasets = load_squad(subset_size=subset_size)
 # masked language modeling (e.g., BERT) — this is for causal LM (e.g., BLOOM).
 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
+
 # Define Trainer
 trainer = Trainer(
     model=model,
@@ -68,13 +69,6 @@ trainer = Trainer(
     data_collator=data_collator,
 )
 
-
-# Parse args
-parser = argparse.ArgumentParser()
-parser.add_argument("--mlflow_uri", type=str, required=True, help="MLflow tracking server URI")
-parser.add_argument("--mlflow_experiment", type=str, required=True, help="MLflow experiment name")
-parser.add_argument("--mlflow_run_group", type=str, required=True, help="MLflow run group")
-args = parser.parse_args()
 
 # Configure MLflow
 mlflow.set_tracking_uri(args.mlflow_uri)
