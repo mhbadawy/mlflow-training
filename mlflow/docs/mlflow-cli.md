@@ -1,6 +1,6 @@
 # MLflow CLI for data scientists
 
-This guide is for **experimentation and inspection**: connecting to a shared tracking server, finding your runs, pulling metrics and artifacts, and reasoning about **reproducibility**. It complements [mlflow-cli.md](./mlflow-cli.md), which leans toward server administration, deployment, and housekeeping.
+This guide is for **experimentation and inspection**: connecting to a shared tracking server, finding your runs, pulling metrics and artifacts, and reasoning about **reproducibility**.
 
 Official reference: [MLflow Command-Line Interface](https://mlflow.org/docs/latest/cli.html).
 
@@ -101,7 +101,7 @@ Use this to copy **run IDs** for deeper inspection or downloads.
 
 ### Full run payload (metrics, params, tags, status): the main “log” view in CLI
 
-There is no separate “tail training log” command in core MLflow. **Structured** training history is whatever was logged as **metrics** and **params**; **unstructured** logs are usually **artifact files** (or tracing; see §7).
+There is no separate “tail training log” command in core MLflow. **Structured** training history is whatever was logged as **metrics** and **params**; **unstructured** logs are usually **artifact files** (or tracing).
 
 Get everything the server stores for one run as **JSON** (good for `jq`, scripts, or pasting into a notebook):
 
