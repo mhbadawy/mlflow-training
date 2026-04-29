@@ -18,7 +18,19 @@ At a high level you get:
 - **Experiments** as named buckets of runs (one problem or project line of work).
 - An **API-first** workflow: `start_run`, log param/metric/artifact, query later from Python or the CLI.
 
-### 1.2 MLflow vs Weights & Biases — executive summary
+### 1.2 Similarities between MLflow and Weights & Biases
+
+Both platforms address the same core problem—making training runs **inspectable and comparable**—and overlap in several practical ways:
+
+- **Experiment tracking:** Each run can record **hyperparameters**, **scalar metrics**, **tags**, and **timestamps**, so you can filter and sort runs without rereading log files by hand.
+- **Artifacts and rich outputs:** You can attach **plots, checkpoints, tables, and other files** to a run for later review or handoff, rather than scattering outputs only on local disk.
+- **Integrations:** Widely used training stacks (e.g. **PyTorch Lightning**, **Hugging Face `Trainer`**) expose first-party or well-supported loggers for both tools, so you rarely need a bespoke logging layer for standard training loops.
+- **Comparative views:** Both provide **UIs or APIs** to compare runs side by side (metrics curves, config diffs), which matters when you are choosing between model variants or debugging regressions.
+- **System and hardware telemetry:** Both can surface **host- and device-level stats** (CPU/GPU utilization, memory, and related signals where the integration allows), which helps separate “slow code” from “saturated hardware.”
+
+Those similarities explain why teams *outside* an air gap often treat them as interchangeable for day-to-day logging. **Your** constraint is not feature overlap but **where the data is allowed to live**.
+
+### 1.3 MLflow vs Weights & Biases — executive summary
 
 On a **closed** network, the question is not “which has the prettier default dashboard” but **which tool can legally and technically run at all**. **MLflow wins that question decisively.** The table still lists W&B for context so you know what you are *not* missing in practice on Shaheen 3.
 
@@ -35,11 +47,6 @@ On a **closed** network, the question is not “which has the prettier default d
 
 **Bottom line for this guide:** If you cannot use W&B’s cloud, **debating W&B’s UI polish is a distraction**. MLflow gives you **working experiment tracking** without fighting your network boundary — migrate so new runs land where your policies already allow them.
 
-### 1.3 What each product optimizes for (and which one matches Shaheen 3)
-
-**MLflow** optimizes for **your** constraints: embed a **tracking URI** next to your jobs, store runs on **institution storage**, query from Python and the **CLI** without any third-party account. That is exactly the air-gapped, batch-scheduler world you live in.
-
-**Weights & Biases** optimizes for **speed on the public internet**: sign up, `wandb.init`, metrics flow to W&B’s servers. That model **assumes egress** and a **vendor relationship** most supercomputing sites will not grant for routine training. The polished collaboration layer is valuable **only after** logs can leave the cluster — **which they cannot** in your default operating model. Treat W&B as a tool for **other** teams’ environments, not as a competitor you are choosing between on equal footing here.
 
 ### 1.4 Detailed comparison (what matters on a cluster or air-gapped site)
 
@@ -92,15 +99,6 @@ Stories about W&B’s **pretty dashboards** and **Sweeps** assume **internet-con
 
 ## Part 2 — Migrating from Weights & Biases to MLflow
 
-Treat migration as a **platform change**, not a one-line swap:
-
-- **Replace** `wandb.init` / `report_to="wandb"` with MLflow run lifecycle and `report_to="mlflow"` (or explicit MLflow logging).
-- **Stand up** a tracking server and artifact store that match your **retention and backup** requirements (as defined with your site).
-- **Define** experiment naming, tags, and artifact layout so old W&B runs remain **reference-only** while new work lands in MLflow.
-<!-- - **Train** the team on how to **inspect runs** (UI where available, CLI and exports where that is how you work on air-gapped systems). -->
-- **Validate** that Transformers autologging and custom logs cover the metrics you relied on in W&B (including GPU metrics if you depend on them; see prerequisites below).
-
-The following sections show **concrete** patterns used in our documentation: Hugging Face Transformers on a Slurm-style cluster (with an optional MLflow UI job), and PyTorch Lightning with `MLFlowLogger`.
 
 ### 2.1 Pre-built MLflow Image
 
@@ -190,7 +188,8 @@ source .mlflow/current_uri.env
 # Optional: echo $MLFLOW_TRACKING_URI
 ```
 
-This pattern is the same idea referenced in the CLI guide: ops may publish `current_uri.env`; your job script **sources** it.
+
+**Note:** you can use `$MLFLOW_TRACKING_URI` as an environment variable directly from the training script or you can pass it as an argument for the training script, both are valid. The following steps explains the argument passing approach. 
 
 ### 2.3 Python: CLI arguments for MLflow (Hugging Face training)
 
@@ -232,6 +231,8 @@ mlflow.set_experiment(args.mlflow_experiment)
 mlflow.transformers.autolog(log_models=False)
 ```
 
+Note: prevent using `log_models=true` with HuggingFace Trainer as it may result in a deadlock (freezing the train script) while trying to save the model
+
 ### 2.5 Send training metrics to MLflow from `Trainer`
 
 In your `TrainingArguments`, set:
@@ -257,11 +258,11 @@ with mlflow.start_run(run_name=args.mlflow_run_group, log_system_metrics=True):
         )
 ```
 
-For **pure experiment tracking**, the critical parts are `**run_name`**, `**log_system_metrics=True**`, `**report_to="mlflow"**`, and `**autolog**`. Logging the full model is optional depending on policy and storage.
+For **pure experiment tracking**, the critical parts are `run_name`, `log_system_metrics=True`, `report_to="mlflow"`, and `autolog`. Logging the full model is optional depending on policy and storage.
 
 ### 2.7 Launch training with the new arguments
 
-Set the environment variables (for example from `current_uri.env` and your own names), then invoke your entrypoint:
+Set the environment variables (for example from `current_uri.env` and your own names), then invoke your entrypoint (your training script):
 
 ```bash
 python scripts/train.py \
@@ -441,6 +442,121 @@ trainer.fit(lit_module)  # lit_module: pl.LightningModule
 
 Minimal contract: **config → logger → `Trainer` → `fit`**, with **metrics and params** flowing through `**self.log`** and `**save_hyperparameters**` on the `LightningModule`.
 
+
+### 2.11 - Vanilla PyTorch with MLflow
+#### Auto logging:
+you don't need anything but these 2 line:
+
+```py
+import mlflow
+mlflow.pytorch.autolog()
+```
+
+**Example:**
+
+```py
+import mlflow
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+# Enable autologging
+mlflow.pytorch.autolog()
+
+# Create synthetic data
+X = torch.randn(1000, 784)
+y = torch.randint(0, 10, (1000,))
+train_loader = DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
+
+# Your existing PyTorch code works unchanged
+model = nn.Sequential(nn.Linear(784, 128), nn.ReLU(), nn.Linear(128, 10))
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+# Training loop - metrics, parameters, and models logged automatically
+for epoch in range(10):
+    for data, target in train_loader:
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+```
+
+#### Manual logging:
+You can explicitly type your mlflow logging if you need further customization:
+using mlflow functions such as: `mlflow.start_run()` , `mlflow.log_params()` , `mlflow.log_metrics()` and `mlflow.pytorch.log_model()`.
+The bellow example shows how to use them:
+```py
+import mlflow
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+
+
+# Define model
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(28 * 28, 512),
+            nn.ReLU(),
+            nn.Linear(512, 10),
+        )
+
+    def forward(self, x):
+        x = self.flatten(x)
+        return self.linear_relu_stack(x)
+
+
+# Training parameters
+params = {
+    "epochs": 5,
+    "learning_rate": 1e-3,
+    "batch_size": 64,
+}
+
+# Training with MLflow logging
+with mlflow.start_run():
+    # Log parameters
+    mlflow.log_params(params)
+
+    # Initialize model and optimizer
+    model = NeuralNetwork()
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=params["learning_rate"])
+
+    # Training loop
+    for epoch in range(params["epochs"]):
+        model.train()
+        train_loss = 0
+        correct = 0
+        total = 0
+
+        for data, target in train_loader:
+            optimizer.zero_grad()
+            output = model(data)
+            loss = loss_fn(output, target)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            _, predicted = output.max(1)
+            total += target.size(0)
+            correct += predicted.eq(target).sum().item()
+
+        # Log metrics per epoch
+        avg_loss = train_loss / len(train_loader)
+        accuracy = 100.0 * correct / total
+
+        mlflow.log_metrics({"train_loss": avg_loss, "train_accuracy": accuracy}, step=epoch)
+
+    # Log final model
+    mlflow.pytorch.log_model(model, name="model")
+```
+
 ---
 
 ## Part 3 — Using the CLI to monitor experiments and runs (and why the browser UI is often secondary on air-gapped HPC)
@@ -451,7 +567,7 @@ Official CLI reference: [MLflow Command-Line Interface](https://mlflow.org/docs/
 
 **Why MLflow UI can be hard to use as your main tool**
 
-- **Network and policy:** Air-gapped or tightly controlled systems often **do not** allow arbitrary long-lived HTTP services, port forwarding from laptops, or browser access to internal node IPs. Even when a UI job is technically possible (see the tunnel example in Part 2), **policy**, **firewall rules**, or **operational friction** mean many scientists work **only** from batch jobs and login nodes.
+- **Network and policy:** Air-gapped or tightly controlled systems often **do not** allow arbitrary long-lived HTTP services, port forwarding from laptops, or browser access to internal node IPs. Even when a UI job is technically possible, **policy**, **firewall rules**, or **operational friction** mean many scientists work **only** from batch jobs and login nodes.
 - **Headless workflows:** Training runs on compute nodes; **inspection** may happen from a login node or a post-processing machine with **no graphical browser** or no route to the tracking host.
 - **No “tail log” subcommand:** As the CLI guide states, there is **no** separate “tail training log” command in core MLflow. **Structured** training history is what was logged as **metrics** and **params**; **unstructured** logs are usually **artifact files**. The CLI exposes that truth directly via `runs describe`, CSV export, and artifact download.
 
@@ -500,6 +616,17 @@ Verify that the CLI sees the same backend:
 mlflow experiments search --max-results 5
 ```
 
+sample output:
+```
+Experiment Id       Name              Artifact Location                                                  
+------------------  ----------------  -------------------------------------------------------------------
+0                   Default           mlflow-artifacts:/0                                                
+399780980698506702  test-experiment1  file:///mlruns/399780980698506702
+407043311271952138  finance spdm      mlflow-artifacts:/407043311271952138                               
+543114047979669464  test-experiment2  file:///mlruns/543114047979669464
+866406674350565752  test-experiment3  file:////mlruns/866406674350565752
+```
+
 If this errors or returns an empty list unexpectedly, fix **network reachability**, **URI spelling**, and **authentication** before debugging individual commands.
 
 #### Persisting the URI
@@ -507,7 +634,6 @@ If this errors or returns an empty list unexpectedly, fix **network reachability
 Typical patterns:
 
 - Add `export MLFLOW_TRACKING_URI=...` to your shell profile or project `.env` that you `source`.
-- On shared clusters, ops may publish a file such as `current_uri.env` containing the export line; your job script can `source` it.
 
 
 Until `mlflow experiments search` works from your machine, treat connectivity as **not** solved.
@@ -552,10 +678,81 @@ Get everything the server stores for one run as **JSON** (good for `jq`, scripts
 mlflow runs describe --run-id <run_id>
 ```
 
+sample output:
+
+```json
+{
+    "info": {
+        "artifact_uri": "mlflow-artifacts:/407043311271952138/9d15995ec7b4425ca0637d1894822dd2/artifacts",
+        "end_time": 1777241108495,
+        "experiment_id": "407043311271952138",
+        "lifecycle_stage": "active",
+        "run_id": "9d15995ec7b4425ca0637d1894822dd2",
+        "run_name": "real estate rg",
+        "start_time": 1777241058188,
+        "status": "FAILED",
+        "user_id": "user1"
+    },
+    "data": {
+        "metrics": {
+            "train_loss_epoch": 0.025587234646081924,
+            "train_loss_step": 0.023293079808354378,
+            "epoch": 5.0,
+            "val_loss": 0.0429033599793911,
+            "val_loss_avg": 0.15990781784057617,
+            "train_loss_avg": 0.05968168005347252,
+            "system/gpu_0_utilization_percentage": 99.0,
+            "system/gpu_0_memory_usage_megabytes": 3292.5,
+            "system/system_memory_usage_megabytes": 13113.6,
+            "system/gpu_0_power_usage_percentage": 99.7,
+            "system/cpu_utilization_percentage": 10.1,
+            "system/disk_available_megabytes": 317001.6,
+            "system/disk_usage_megabytes": 159795.6,
+            "system/network_receive_megabytes": 0.6235329999999522,
+            "system/system_memory_usage_percentage": 79.7,
+            "system/network_transmit_megabytes": 0.6278859999999895,
+            "system/gpu_0_power_usage_watts": 54.9,
+            "system/disk_usage_percentage": 33.5,
+            "system/gpu_0_memory_usage_percentage": 51.1
+        },
+        "params": {
+            "batch_size": "512",
+            "block_size": "64",
+            "learning_rate": "0.0003",
+            "eval_iters": "200",
+            "eval_every_n_epochs": "33"
+        },
+        "tags": {
+            "mlflow.source.name": "train.py",
+            "mlflow.source.git.commit": "f328948b4beed94a693875eda6f9bbd592ee0e91",
+            "mlflow.user": "user1",
+            "mlflow.source.type": "LOCAL",
+            "mlflow.runName": "real estate rg"
+        }
+    },
+    "inputs": {
+        "model_inputs": [],
+        "dataset_inputs": []
+    },
+    "outputs": {
+        "model_outputs": []
+    }
+}
+
+```
+
 Example with filtering (requires `jq`):
 
 ```bash
-mlflow runs describe --run-id <run_id> | jq '.data.metrics[] | select(.key=="loss")'
+mlflow runs describe --run-id <run_id> |  jq '.data.metrics | to_entries[] | select(.key == "val_loss_avg")'
+```
+
+sample output:
+```
+{
+  "key": "val_loss_avg",
+  "value": 0.15990781784057617
+}
 ```
 
 #### Spreadsheet-friendly comparison for one experiment
@@ -563,7 +760,7 @@ mlflow runs describe --run-id <run_id> | jq '.data.metrics[] | select(.key=="los
 Export all runs in an experiment to CSV (metrics/params columns—useful for offline pivots):
 
 ```bash
-mlflow experiments csv --experiment-id 12 -o runs_exp12.csv
+mlflow experiments csv --experiment-id <experiment-id> -o <output-file-name>.csv
 ```
 
 This supports **reproducibility audits**: sort by a validation metric, then open the matching `run_id` for artifacts and tags.
@@ -580,26 +777,42 @@ Artifacts live under each run’s artifact root (implementation depends on artif
 mlflow artifacts list --run-id <run_id>
 ```
 
-**List a subdirectory** (e.g. `plots/` or `checkpoints/`):
+Sample output:
+
+```sh
+[{
+  "path": "figures",
+  "is_dir": true
+}]
+```
+
+**List a subdirectory** (e.g. `figures` or `plots/` or `checkpoints/`):
 
 ```bash
 mlflow artifacts list --run-id <run_id> --artifact-path plots
 ```
 
-**Download** everything for a run (or one path) to your workspace or cluster scratch:
+Sample output:
+
+```
+[{
+  "path": "figures/val_pred_epoch_0000.png",
+  "is_dir": false,
+  "file_size": 192857
+}]
+```
+
+<!-- **Copy** everything for a run (or one path) to your selected destination directory:
 
 ```bash
 mlflow artifacts download --run-id <run_id> --dst-path ./downloaded_run
 mlflow artifacts download --run-id <run_id> --artifact-path model --dst-path ./model_only
-```
+``` -->
 
 If your training code wrote **stdout** to a file and logged it with `mlflow.log_artifact`, that file appears here like any other artifact.
 
-### 3.7 Optional CLI utilities (beyond core experiment inspection)
 
-Runs that logged an MLflow model record artifact paths under the run; **model URIs** like `runs:/<run_id>/model` appear in broader MLflow docs. For **pure experiment tracking**, listing and downloading artifacts is usually enough. If your project logs **MLflow traces** (LLM apps, agents), the `mlflow traces` command group lists and searches traces against the same `MLFLOW_TRACKING_URI`; see `mlflow traces --help` for your installed version.
-
-### 3.8 Minimal end-to-end CLI workflow (copy-paste)
+### 3.7 Minimal end-to-end CLI workflow (copy-paste)
 
 Replace placeholders with values from your environment.
 
@@ -618,7 +831,7 @@ mlflow runs list --experiment-id <experiment_id>
 # 4) Inspect one run (metrics, params, tags)
 mlflow runs describe --run-id <run_id> | jq .
 
-# 5) Pull artifacts for local analysis
+# 5) Copy artifacts to your desired location
 mlflow artifacts list --run-id <run_id>
 mlflow artifacts download --run-id <run_id> --dst-path ./artifacts_<run_id>
 
@@ -658,7 +871,7 @@ This does **not** replace full notebook analysis or every UI feature; it **close
 
 YouPlot is **not** claimed to replace notebooks, or the full MLflow UI; it is the **low-friction default** for the **documented shell + MLflow** path.
 
-### 4.3 Why YouPlot versus other CLI tools (honest comparison)
+### 4.3 Why YouPlot versus other CLI tools
 
 Our case = **terminal + MLflow text metrics + shell pipelines**.
 
@@ -685,7 +898,7 @@ We still use those tools when the task fits. YouPlot wins here when you want **f
 
 When you use the **file store** (default `mlruns` under the project directory), MLflow arranges data like this (IDs are examples):
 
-```text
+```sh
 <project>/mlruns/
 └── 407043311271952138/                    # Experiment ID (directory name)
     └── 1ec66186e2064779901587b73000a9ee/  # Run ID
@@ -721,8 +934,12 @@ Point `uplot line` at a concrete metric file under `metrics/`. MLflow’s metric
 
 ```bash
 uplot line -d " " \
-  /path/to/your/project/mlruns/407043311271952138/1ec66186e2064779901587b73000a9ee/metrics/train_loss_avg
+  /path/to/your/project/mlruns/<experiment-id>/<run-id>/metrics/train_loss_avg
 ```
+
+Sample output:
+
+![plot](./Screenshot%20from%202026-04-27%2010-22-22.png)
 
 
 | Item             | Description                                                                                                                         |
@@ -739,9 +956,9 @@ For the full set of subcommand options, run `uplot line --help`.
 `**watch**` re-runs a command at a fixed interval and redraws the terminal — useful while a run is still appending to a metric file.
 
 ```bash
-watch -n 5 'uplot line -d " " /path/to/your/project/mlruns/407043311271952138/f8122550c3674954b998936799ffc78a/metrics/system/gpu_0_power_usage_percentage'
+watch -n 5 'uplot line -d " " /path/to/your/project/mlruns/<experiment-id>/<run-id>/metrics/system/gpu_0_memory_usage_percentage'
 ```
-
+![plot](./Screenshot%20from%202026-04-28%2018-03-22.png)
 
 | Item                    | Description                                                                                         |
 | ----------------------- | --------------------------------------------------------------------------------------------------- |
@@ -754,11 +971,7 @@ On systems without GNU `watch`, use an equivalent utility or a short `while` loo
 
 ### 4.8 Relative paths from a run’s `metrics` directory and `--fmt`
 
-If you `**cd`** to a run’s `metrics` folder, you can pass **relative** paths and use `**--fmt xy`** so the first column is **x** and the second **y** (step vs value).
-
-```bash
-cd /path/to/your/project/mlruns/407043311271952138/f8122550c3674954b998936799ffc78a/metrics
-```
+If you `cd` to a run’s `metrics` folder, you can pass **relative** paths and use `**--fmt xy`** so the first column is **x** and the second **y** (step vs value).
 
 Then:
 
@@ -840,12 +1053,12 @@ Replace example paths and run IDs with values from your environment.
 
 ## FAQs (frequently asked questions):
 
-1. **Why as a Shaheen 3 data scientist must I migrate to MLflow?**
-  See **Part 1**: **§1** opening framing, **§1.2** executive summary table, detailed **§1.4** (deployment, governance, integration, sweeps), **§1.5** mandatory-fit criteria, **§1.6** (why W&B FOMO does not apply), and **§1.7** conclusion — migrate and commit **inside** your network boundary.
+1. **Why as a Shaheen 3 cluster user must I migrate to MLflow?**
+  See **Part 1**: **1** opening framing, **1.2** executive summary table, detailed comparison **1.4**, **1.6** (why W&B FOMO does not apply).
 2. **Why can’t I use MLflow UI? Is the CLI a good replacement? Can it do everything the UI does?**
-  See **§3.1**: UI often blocked or inconvenient on air-gapped/SSH-first systems; **no core “tail” command** — structured history is metrics/params/artifacts. **CLI + exports + terminal plots** are the **practical** monitor here; browser compare views are optional when policy allows — not the baseline on Shaheen 3.
+  See **3.1**: UI often blocked or inconvenient on air-gapped/SSH-first systems; **no core “tail” command** — structured history is metrics/params/artifacts. **CLI + exports + terminal plots** are the **practical** monitor here; browser compare views are optional when policy allows — not the baseline on Shaheen 3.
 3. **Why do we need a CLI plotting tool? What is YouPlot? How do I use and integrate it?**
-  See **Part 4** in full: rationale (**§4.1**), definition (**§4.2–4.4**), `mlruns` layout (**§4.5**), `uplot line`, `**watch`**, relative paths `**--fmt xy**` (**§4.6–4.8**), combining with `**mlflow runs describe`** (**§4.9**), and integration table (**§4.10–4.11**).
+  See **Part 4** in full: rationale (**4.1**), definition (**4.2–4.4**), `mlruns` layout (**4.5**), `uplot line`, `watch`, relative paths `**--fmt xy**` (**4.6–4.8**), combining with `mlflow runs describe` (**4.9**), and integration table (**4.10–4.11**).
 
 ---
 
