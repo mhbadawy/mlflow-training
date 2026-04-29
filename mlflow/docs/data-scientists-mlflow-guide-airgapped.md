@@ -6,11 +6,11 @@ This guide consolidates our MLflow documentation for **data scientists** who run
 
 ## Part 1 — Why MLflow, and why MLflow instead of Weights & Biases
 
-**Audience and reality check:** If you work on **Shaheen 3** (or similarly **air-gapped** HPC), **Weights & Biases is not an option** for normal operation: compute nodes do not reach the public internet, and exporting experiment metadata to a vendor SaaS conflicts with site policy and security review. **MLflow is not “one of two equal choices” here — it is the platform that matches the configuration we have.** The comparison below shows why W&B’s default model breaks on this class of system, and why standardizing on MLflow is the rational and **only** sustainable path for production experiment tracking in your environment.
+**Audience and reality check:** If you work on **Shaheen 3** (or similarly **air-gapped** HPC), **Weights & Biases is not an option** for normal operation: compute nodes do not reach the public internet, and exporting experiment metadata to a vendor SaaS conflicts with site policy and security review. The comparison below shows why W&B’s default model breaks on this class of system, and why standardizing on MLflow is the rational sustainable path for production experiment tracking in your environment.
 
 ### 1.1 Why MLflow in general
 
-[MLflow](https://mlflow.org/) is an open-source platform organized around **tracking**, **projects**, **models**, and **model registry** (the exact feature set evolves with releases). For daily science work, the important idea is that MLflow is designed to be **embedded in your environment**: a **tracking URI** on a lab server, a job on a cluster, or a service inside your account. Experiments are stored in backends **you** choose (local files, SQL, remote artifact stores), which makes it straightforward to align with **data residency** and **batch/offline** training on clusters **without** requiring persistent internet from compute nodes.
+[MLflow](https://mlflow.org/) is an open-source platform organized around **tracking**, **projects**, **models**, and **model registry** (the exact feature set evolves with releases). For daily science work, the important idea is that MLflow is designed to be **embedded in your environment**: a **tracking URI** on a lab server, a job on a cluster, or a service inside your account. Experiments are stored in backends **you** choose (local files, SQL), which makes it straightforward to align with **data residency** and **batch/offline** training on clusters **without** requiring persistent internet from compute nodes.
 
 At a high level you get:
 
@@ -30,11 +30,10 @@ On a **closed** network, the question is not “which has the prettier default d
 | Experiment UI        | **Metrics, params, artifacts** — what you need for science; CLI + exports close the loop without a browser | Polished team UI — **irrelevant if you cannot ship metrics out**                          |
 | Hugging Face         | Native `report_to="mlflow"` and MLflow Transformers integration — **first-class** for your training code   | `report_to="wandb"` assumes **outbound connectivity** from the job                        |
 | Sweeps / HPO         | Pair with **Optuna, Ray Tune, Slurm arrays** — matches how HPC jobs are already launched                   | Built-in sweeps are a **nice-to-have** you cannot rely on if the logger cannot phone home |
-| Cost model           | Infrastructure you already pay for; **predictable**                                                        | Subscriptions + compliance overhead when you try to bolt W&B onto restricted sites        |
 | Compliance / air gap | **Designed for** on-prem, no external telemetry **by default**                                             | Not possible on an air-gapped system (like shaheen-3)                                     |
 
 
-**Bottom line for this guide:** If you cannot use W&B’s cloud, **debating W&B’s UI polish is a distraction**. MLflow gives you **working experiment tracking** without fighting your network boundary — migrate **now** so new runs land where your policies already allow them.
+**Bottom line for this guide:** If you cannot use W&B’s cloud, **debating W&B’s UI polish is a distraction**. MLflow gives you **working experiment tracking** without fighting your network boundary — migrate so new runs land where your policies already allow them.
 
 ### 1.3 What each product optimizes for (and which one matches Shaheen 3)
 
@@ -48,7 +47,8 @@ On a **closed** network, the question is not “which has the prettier default d
 
 **MLflow.** You run the tracking server (or use a managed offering **you** control). On HPC, the standard pattern is a job or service on the cluster network, artifacts on **shared filesystem** or object storage **inside** the boundary. **No third party ever sees your metrics** unless you explicitly bridge out — which you will not on Shaheen 3.
 
-**W&B.** The **default** is logging to **W&B’s cloud**. Training nodes need **outbound HTTPS** — which **air-gapped compute does not provide**. **For routine production ML on Shaheen 3, W&B’s default networking model simply does not apply; MLflow’s does.**
+**W&B.** The **default** is logging to **W&B’s cloud**. Training nodes need **outbound HTTPS** — which **air-gapped compute does not provide**.
+
 
 #### Data governance and security
 
@@ -57,47 +57,36 @@ On a **closed** network, the question is not “which has the prettier default d
 
 #### Integrations and the Hugging Face `Trainer`
 
-Both support `report_to`, but **tutorials defaulting to `wandb`** are a **habit**, not a capability gap: `**report_to="mlflow"`** is officially supported and maps the same training metrics into runs you own. On Shaheen 3, **MLflow is the integration that actually runs end-to-end**. Prefer MLflow in new code and **migrate** old `wandb` snippets — you are aligning with **reality**, not downgrading.
+Both support `report_to`, not a capability gap: `report_to="mlflow"` is officially supported and maps the same training metrics into runs you own. On Shaheen 3, **MLflow is the integration that actually runs end-to-end**. Prefer MLflow in new code
 
 #### Integration and the lightning 
 
-add here
+Both logging utilites are supported by lightning using:
 
-#### Hyperparameter optimization and large-scale sweeps
+```py
+from lightning.pytorch.loggers import WandbLogger
+```
+or
+```py
+from lightning.pytorch.loggers import MLFlowLogger
+```
 
-**W&B Sweeps** are slick **if** every trial can talk to W&B — **blocked** on typical air-gapped compute.
-
-**MLflow** pairs with **what you already use**: **Optuna**, **Ray Tune**, **Slurm arrays**, Kubernetes jobs — each trial logs runs to MLflow. That looks like “extra assembly” until you realize **your scheduler owns the swarm**, not a SaaS API. **That is HPC-native** and aligns with reproducibility you can defend in audit.
-
-#### Cost and operations
-
-**MLflow:** You pay for **storage and compute you already fund** for HPC; the tracking service is a **thin** addition. No per-seat SaaS bill for **logging experiment metadata** — the main cost is **shared ops** you would spend anyway for any serious internal service.
-
-**W&B:** **Subscription and usage** costs, **plus** the hidden price of **making** a cloud-first tool fit a site that never wanted cloud experiment paths. On air-gapped Shaheen 3, **MLflow is the cost-effective default** because it does not ask the network to do what policy forbids.
-
-#### Risk and lock-in
-
-**W&B** anchors history to a **vendor account** — workable if you trust long-term egress; **fraught** when policy may force you off SaaS mid-project.
-
-**MLflow** stores runs **on your disks and schemas**. You **choose** backups and retention; there is **no** subscription churn deciding whether you keep read access to yesterday’s sweep. **That is strategic ownership**, not overhead, for regulated and air-gapped sites.
 
 ### 1.5 Why you should standardize on MLflow on Shaheen 3
 
-**You are not choosing between two equally available products.** On an air-gapped supercomputer, **MLflow is the practical default** for experiment tracking. Treat the following as **mandatory fit criteria** you already satisfy — which together **compel** adoption of MLflow for new work and **migration** of old W&B-oriented scripts:
+On an air-gapped supercomputer, **MLflow is the practical default** for experiment tracking:
 
-1. **Policy and network reality.** Compute nodes do **not** call external experiment APIs; metadata and artifacts must stay on **institution-controlled** storage — **non-negotiable for Shaheen 3.**
+1. **Policy and network reality.** Compute nodes do **not** call external experiment APIs; metadata and artifacts must stay on **institution-controlled** storage.
 2. **HPC-native workflow.** Training is **Slurm** (or equivalent); a **self-hosted** tracking URI and file/DB backend match how jobs are actually scheduled and how scratch and project filesystems work.
-3. **Scale without SaaS tax.** High run volume and large teams amplify **seat and egress** friction for cloud loggers — MLflow amortizes tracking onto **infra you already run**.
-4. **Single stack.** Aligning on MLflow avoids split-brain workflows (some researchers “skipping” logging because `wandb` fails offline).
-5. **Reproducibility is the mission.** You need **durable, queryable runs** — parameters, metrics, artifacts, git tags — auditable inside the fence. MLflow delivers that **without** an external observability dependency.
+3. **Reproducibility is the mission.** You need **durable, queryable runs** — parameters, metrics, artifacts, git tags — auditable inside the fence. MLflow delivers that **without** an external observability dependency.
 
 ### 1.6 What about Weights & Biases hype?
 
 Stories about W&B’s **pretty dashboards** and **Sweeps** assume **internet-connected** GPUs and procurement that allows **routine export** of experiment streams to a vendor. **That is not your Shaheen 3 operating mode.** 
 
-### 1.7 Conclusion — migrate to MLflow and commit
+<!-- ### 1.7 Conclusion — migrate to MLflow and commit
 
-**Weights & Biases is the wrong abstraction for routine experiment tracking on an air-gapped Shaheen 3 class system:** it assumes connectivity and vendor infrastructure your environment does **not** grant. **MLflow is the right abstraction**: open source, on-prem, `**MLFLOW_TRACKING_URI` beside your jobs**, runs and artifacts on **your** storage, CLI and notebooks for inspection without an outbound pipe.
+**Weights & Biases is the wrong abstraction for routine experiment tracking on an air-gapped Shaheen 3 class system:** it assumes connectivity and vendor infrastructure your environment does **not** grant. **MLflow is the right abstraction**: open source, on-prem, `MLFLOW_TRACKING_URI` beside your jobs**, runs and artifacts on **your** storage, CLI and notebooks for inspection without an outbound pipe. -->
 
 ---
 
@@ -113,18 +102,13 @@ Treat migration as a **platform change**, not a one-line swap:
 
 The following sections show **concrete** patterns used in our documentation: Hugging Face Transformers on a Slurm-style cluster (with an optional MLflow UI job), and PyTorch Lightning with `MLFlowLogger`.
 
-<!-- ### 2.1 Prerequisites (conda environment and GPU metrics)
+### 2.1 Pre-built MLflow Image
 
-- A conda environment with **MLflow** and **Transformers** (for example `mlflow-pytorch-transformer` as in the Slurm example below).
-- `**nvidia-ml-py`** in that same environment if you want GPU-related **system metrics** in MLflow. If `pynvml` fails to import despite `pip` reporting satisfaction, force a clean install into the active environment:
-
-```bash
-python -m pip install --upgrade --ignore-installed nvidia-ml-py mlflow
-``` -->
+You do **not** need to manually install MLflow or related packages. A pre-built environment image will be provided, which comes with **MLflow** (and related deps) already installed and configured.
 
 ### 2.2 Optional cluster pattern: publishing the tracking URI (Slurm / IBEX-style)
 
-The following illustrates how an MLflow **HTTP** frontend can run on a compute node while publishing a `**MLFLOW_TRACKING_URI`** file that training jobs can `source`. This matches **HPC-first** workflows: training scripts read a stable path on shared filesystem rather than guessing hostnames.
+The following illustrates how an MLflow **HTTP** frontend can run on a compute node while publishing a `MLFLOW_TRACKING_URI` file that training jobs can `source`. This matches **HPC-first** workflows: training scripts read a stable path on shared filesystem rather than guessing hostnames.
 
 Save as a job script (for example `mlflow_ui.sbatch`), adjust paths or resource directives per site policy, then submit with `sbatch mlflow_ui.sbatch`.
 
@@ -148,9 +132,13 @@ sbatch --export=PUBLISH_DIR='/your/custom/path/.mlflow',RUN_DIR='/your/other/cus
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/mlflow-ui-%j.out
 
-source /ibex/user/$USER/miniforge/etc/profile.d/conda.sh
 
-conda activate mlflow-pytorch-transformer
+# The following commented lines are the conda environment setup on ibex for this example, replace them with the pre-installed mlflow images that have been provided 
+# ====================================================
+# source /ibex/user/$USER/miniforge/etc/profile.d/conda.sh
+# conda activate mlflow-pytorch-transformer
+# ====================================================
+
 
 set -euo pipefail
 
@@ -346,11 +334,7 @@ mlf_logger = MLFlowLogger(
 import lightning.pytorch as pl
 
 trainer = pl.Trainer(
-    max_epochs=10,
     logger=mlf_logger,
-    accelerator="auto",
-    devices=1,
-    log_every_n_steps=10,
 )
 ```
 
