@@ -14,7 +14,7 @@ This guide consolidates our MLflow documentation for **data scientists** who run
 7. [How do I view and analyze MLflow experiment metrics without a UI?](#410-how-this-integrates-with-your-system)
 8. [How do I plot live metrics and monitor runs in the terminal? What is YouPlot?](#42-what-youplot-is)
 9. [What are the most common CLI commands and patterns I should know?](#411-quick-reference-table)
-10. [Why can’t I just use the MLflow UI? Is the CLI a good alternative?](#faqs-frequently-asked-questions)
+10. [Why can’t I just use the MLflow UI? Is the CLI a good alternative?](#41-why-we-need-a-cli-plotting-tool)
 11. [How do I find my run IDs and metric files?](#411-quick-reference-table)
 
 ---
