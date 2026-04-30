@@ -3,6 +3,21 @@
 This guide consolidates our MLflow documentation for **data scientists** who run experiments on **isolated or air-gapped** infrastructure. It focuses on **experiments, parameters, metrics, artifacts, and reproducibility**. It does **not** cover model deployment, shipping, or production operations.
 
 ---
+## Table of Contents: Key Questions Answered
+
+1. [Why is MLflow the right choice for Shaheen 3 and air-gapped HPC systems?](#part-1--why-mlflow-and-why-mlflow-instead-of-weights--biases)
+2. [How does MLflow compare to Weights & Biases for experiment tracking?](#12-similarities-between-mlflow-and-weights--biases)
+3. [How does experiment tracking work in MLflow? (Parameters, metrics, artifacts, & more)](#11-why-mlflow-in-general)
+4. [How to use MLFlow in pytoch training script](#24---vanilla-pytorch-with-mlflow)
+5. [How to use MLFlow in pytoch-lightning training script](#25---vanilla-pytorch-with-mlflow)
+6. [How to use MLFlow with Hugging-face Trainer](#26-configure-mlflow-and-hugging-face-autologging)
+7. [How do I view and analyze MLflow experiment metrics without a UI?](#410-how-this-integrates-with-your-system)
+8. [How do I plot live metrics and monitor runs in the terminal? What is YouPlot?](#42-what-youplot-is)
+9. [What are the most common CLI commands and patterns I should know?](#411-quick-reference-table)
+10. [Why can’t I just use the MLflow UI? Is the CLI a good alternative?](#faqs-frequently-asked-questions)
+11. [How do I find my run IDs and metric files?](#411-quick-reference-table)
+
+---
 
 ## Part 1 — Why MLflow, and why MLflow instead of Weights & Biases
 
@@ -191,7 +206,7 @@ source .mlflow/current_uri.env
 
 **Note:** you can use `$MLFLOW_TRACKING_URI` as an environment variable directly from the training script or you can pass it as an argument for the training script, both are valid. The following steps explains the argument passing approach. 
 
-### 2.3 Python: CLI arguments for MLflow (Hugging Face training)
+### 2.3 Python: CLI arguments for MLflow
 
 ```python
 import argparse
@@ -220,230 +235,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 ```
-
-### 2.4 Configure MLflow and Hugging Face autologging
-
-Call this after parsing arguments and before constructing the trainer (order may matter for autolog hooks):
-
-```python
-mlflow.set_tracking_uri(args.mlflow_uri)
-mlflow.set_experiment(args.mlflow_experiment)
-mlflow.transformers.autolog(log_models=False)
-```
-
-Note: prevent using `log_models=true` with HuggingFace Trainer as it may result in a deadlock (freezing the train script) while trying to save the model
-
-### 2.5 Send training metrics to MLflow from `Trainer`
-
-In your `TrainingArguments`, set:
-
-```python
-report_to="mlflow",
-```
-
-so the Hugging Face `Trainer` streams scalars and related logs to the active MLflow run.
-
-### 2.6 Wrap training in an MLflow run and log the final model bundle
-
-Place `trainer.train()` inside `mlflow.start_run`. Log the full Transformers bundle only from the **global main process** to avoid duplicate uploads in distributed training:
-
-```python
-with mlflow.start_run(run_name=args.mlflow_run_group, log_system_metrics=True):
-    trainer.train()
-    if trainer.is_world_process_zero():
-        print("Uploading final model to MLflow server...")
-        mlflow.transformers.log_model(
-            transformers_model={"model": model, "tokenizer": tokenizer},
-            artifact_path="final_model",
-        )
-```
-
-For **pure experiment tracking**, the critical parts are `run_name`, `log_system_metrics=True`, `report_to="mlflow"`, and `autolog`. Logging the full model is optional depending on policy and storage.
-
-### 2.7 Launch training with the new arguments
-
-Set the environment variables (for example from `current_uri.env` and your own names), then invoke your entrypoint (your training script):
-
-```bash
-python scripts/train.py \
-  --mlflow_uri "$MLFLOW_TRACKING_URI" \
-  --mlflow_experiment "$MLFLOW_EXPERIMENT_NAME" \
-  --mlflow_run_group "$MLFLOW_RUN_GROUP"
-```
-
-### 2.8 Adding custom metrics (optional)
-
-```python
-import mlflow
-
-with mlflow.start_run():
-    # ... model training ...
-    accuracy = 0.95
-    f1_score = 0.92
-    mlflow.log_metric("accuracy", accuracy)
-    mlflow.log_metrics({"f1_score": f1_score, "precision": 0.93})
-```
-
-### 2.9 Run grouping note (important for sweeps and batches)
-
-MLflow does not expose a single first-class object called “run group” in the CLI. Teams usually implement **grouping** via **tags**, **run name**, or **parent/child runs**. In this repository’s training jobs, `**--mlflow_run_group`** is passed as `**run_name**` so all jobs in one logical batch share the same display label — useful when comparing runs in exports or JSON.
-
-**Reproducibility checklist** when reviewing a group of runs:
-
-1. Same **code**: tag or param with **git SHA** (or container image digest).
-2. Same **data**: artifact or tag pointing to dataset version / snapshot ID.
-3. Same **environment**: logged `requirements.txt` or conda env under artifacts.
-4. **Params** that actually control the sweep (learning rate, seed, etc.).
-
-### 2.10 PyTorch Lightning with MLflow (alternative training stack)
-
-This section duplicates `mlflow-with-lightning.md` in full substance for Lightning users.
-
-
-#### Configure MLflow (URI and experiment)
-
-Before training, point the client at your tracking backend and choose an experiment:
-
-```python
-import mlflow
-
-mlflow.set_tracking_uri("http://localhost:5000")  # or file:/path, S3, etc.
-mlflow.set_experiment("my_experiment")
-```
-
-The same URI and experiment name are passed to the Lightning logger (below).
-
-#### Create an `MLFlowLogger`
-
-```python
-from lightning.pytorch.loggers import MLFlowLogger
-
-mlf_logger = MLFlowLogger(
-    experiment_name="my_experiment",
-    tracking_uri="http://localhost:5000",
-    run_name="optional_run_name",
-    # log_model=True uploads checkpoints; set False if you only want metrics
-    log_model=False,
-)
-```
-
-**Avoid nested runs for the same training job:** if you use `MLFlowLogger`, you typically **do not** wrap `trainer.fit()` in `mlflow.start_run(...)` for the same experiment, unless you intentionally want a parent/child run hierarchy.
-
-#### Wire the logger into `Trainer`
-
-```python
-import lightning.pytorch as pl
-
-trainer = pl.Trainer(
-    logger=mlf_logger,
-)
-```
-
-
-| Trainer argument           | Typical use with MLflow                              |
-| -------------------------- | ---------------------------------------------------- |
-| `logger`                   | `MLFlowLogger` (or a list of loggers).               |
-| `log_every_n_steps`        | How often step-level metrics are flushed to the run. |
-| `max_steps` / `max_epochs` | Stopping policy; does not change how logging works.  |
-
-
-#### Log from a `LightningModule`
-
-In `training_step`, `validation_step`, `test_step`, and hooks like `on_train_epoch_end`, use `**self.log**`. Lightning routes these to all attached loggers, including MLflow.
-
-```python
-def training_step(self, batch, batch_idx):
-    loss = ...
-    self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-    return loss
-```
-
-
-| `self.log` flags (common) | Effect                                                   |
-| ------------------------- | -------------------------------------------------------- |
-| `on_step=True`            | Log at each step (and optionally aggregate).             |
-| `on_epoch=True`           | Emit epoch-level values (e.g. averaged validation loss). |
-| `prog_bar=True`           | Show in the training progress bar.                       |
-
-
-**Hyperparameters:** call `self.save_hyperparameters()` in `__init__` (optionally with `ignore=[...]` for large non-serializable objects). They are sent to loggers, including MLflow, as run parameters.
-
-```python
-def __init__(self, lr: float, ...):
-    super().__init__()
-    self.save_hyperparameters(ignore=["large_buffer"])
-```
-
-#### System metrics
-
-`**mlflow.start_run(log_system_metrics=True)**` only applies when you open a run that way. Lightning’s `MLFlowLogger` creates runs through the client API, so that flag on `start_run` is not in play.
-
-**Global enable (typical in MLflow 2/3+):**
-
-```python
-import mlflow
-
-mlflow.enable_system_metrics_logging()
-```
-
-If system metrics still do not appear for runs created by the logger, check MLflow’s behavior for your version: you may need a small callback that starts MLflow’s `SystemMetricsMonitor` for the active run id (as returned by the logger) to mirror `start_run` behavior.
-
-
-#### Checkpoints and logged artifacts (experiments focus)
-
-
-| Mechanism                                                 | Role                                                                     |
-| --------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `mlflow.pytorch.log_model` (in a callback or after `fit`) | Log a `torch.nn.Module` as an MLflow model artifact.                     |
-| `MLFlowLogger(log_model=...)`                             | Controls whether Lightning uploads model/checkpoint artifacts to MLflow. |
-
-
-If you use both a checkpoint callback and `mlflow.pytorch.log_model`, you can log **one** “best” model from the best checkpoint after training to avoid duplicating every intermediate file as a large artifact.
-
-#### What appears in MLflow
-
-
-| Source                                           | In MLflow                                                             |
-| ------------------------------------------------ | --------------------------------------------------------------------- |
-| `MLFlowLogger`                                   | A run in the given experiment, linked to the tracking URI.            |
-| `self.log(...)`                                  | Metrics (names and step/epoch as configured).                         |
-| `save_hyperparameters`                           | Parameters (unless ignored).                                          |
-| `enable_system_metrics_logging` / custom monitor | System metrics (OS/resource), when supported for that run.            |
-| `mlflow.pytorch.log_model` (if used)             | Artifacts under the chosen `artifact_path` (e.g. `MLmodel`, weights). |
-
-
-#### Practical tips (Lightning)
-
-1. **One run per `trainer.fit`:** the logger usually creates a single run; metrics from that run belong together.
-2. **Resume training:** use Lightning’s checkpointing (`ckpt_path`) rather than depending on MLflow for optimizer state; MLflow remains for **tracking**, not the primary source of resumable training state unless you build that flow explicitly.
-3. **Reproducibility:** log git commit, data version, or seeds as extra parameters (manual `mlflow.log_param` in setup code, or hyperparameters) if you need them in the run metadata.
-
-#### Quick reference wiring (Lightning)
-
-```python
-import mlflow
-import lightning.pytorch as pl
-from lightning.pytorch.loggers import MLFlowLogger
-
-mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment("my_experiment")
-mlflow.enable_system_metrics_logging()  # optional; verify for your MLflow + logger combo
-
-mlf_logger = MLFlowLogger(
-    experiment_name="my_experiment",
-    tracking_uri="http://localhost:5000",
-    run_name="try-1",
-    log_model=False,
-)
-
-trainer = pl.Trainer(max_epochs=10, logger=mlf_logger, accelerator="auto", devices=1)
-trainer.fit(lit_module)  # lit_module: pl.LightningModule
-```
-
-Minimal contract: **config → logger → `Trainer` → `fit`**, with **metrics and params** flowing through `**self.log`** and `**save_hyperparameters**` on the `LightningModule`.
-
-
-### 2.11 - Vanilla PyTorch with MLflow
+### 2.4 - Vanilla PyTorch with MLflow
 #### Auto logging:
 you don't need anything but these 2 line:
 
@@ -556,6 +348,227 @@ with mlflow.start_run():
     # Log final model
     mlflow.pytorch.log_model(model, name="model")
 ```
+
+### 2.5 PyTorch Lightning with MLflow (alternative training stack)
+
+This section duplicates `mlflow-with-lightning.md` in full substance for Lightning users.
+
+
+#### Configure MLflow (URI and experiment)
+
+Before training, point the client at your tracking backend and choose an experiment:
+
+```python
+import mlflow
+
+mlflow.set_tracking_uri("http://localhost:5000")  # or file:/path, S3, etc.
+mlflow.set_experiment("my_experiment")
+```
+
+The same URI and experiment name are passed to the Lightning logger (below).
+
+#### Create an `MLFlowLogger`
+
+```python
+from lightning.pytorch.loggers import MLFlowLogger
+
+mlf_logger = MLFlowLogger(
+    experiment_name="my_experiment",
+    tracking_uri="http://localhost:5000",
+    run_name="optional_run_name",
+    # log_model=True uploads checkpoints; set False if you only want metrics
+    log_model=False,
+)
+```
+
+**Avoid nested runs for the same training job:** if you use `MLFlowLogger`, you typically **do not** wrap `trainer.fit()` in `mlflow.start_run(...)` for the same experiment, unless you intentionally want a parent/child run hierarchy.
+
+#### Wire the logger into `Trainer`
+
+```python
+import lightning.pytorch as pl
+
+trainer = pl.Trainer(
+    logger=mlf_logger,
+)
+```
+
+
+| Trainer argument           | Typical use with MLflow                              |
+| -------------------------- | ---------------------------------------------------- |
+| `logger`                   | `MLFlowLogger` (or a list of loggers).               |
+| `log_every_n_steps`        | How often step-level metrics are flushed to the run. |
+| `max_steps` / `max_epochs` | Stopping policy; does not change how logging works.  |
+
+
+#### Log from a `LightningModule`
+
+In `training_step`, `validation_step`, `test_step`, and hooks like `on_train_epoch_end`, use `**self.log**`. Lightning routes these to all attached loggers, including MLflow.
+
+```python
+def training_step(self, batch, batch_idx):
+    loss = ...
+    self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+    return loss
+```
+
+
+| `self.log` flags (common) | Effect                                                   |
+| ------------------------- | -------------------------------------------------------- |
+| `on_step=True`            | Log at each step (and optionally aggregate).             |
+| `on_epoch=True`           | Emit epoch-level values (e.g. averaged validation loss). |
+| `prog_bar=True`           | Show in the training progress bar.                       |
+
+
+**Hyperparameters:** call `self.save_hyperparameters()` in `__init__` (optionally with `ignore=[...]` for large non-serializable objects). They are sent to loggers, including MLflow, as run parameters.
+
+```python
+def __init__(self, lr: float, ...):
+    super().__init__()
+    self.save_hyperparameters(ignore=["large_buffer"])
+```
+
+#### System metrics
+
+`mlflow.start_run(log_system_metrics=True)` only applies when you open a run that way. Lightning’s `MLFlowLogger` creates runs through the client API, so that flag on `start_run` is not in play.
+
+**Global enable (typical in MLflow 2/3+):**
+
+```python
+import mlflow
+
+mlflow.enable_system_metrics_logging()
+```
+
+If system metrics still do not appear for runs created by the logger, check MLflow’s behavior for your version: you may need a small callback that starts MLflow’s `SystemMetricsMonitor` for the active run id (as returned by the logger) to mirror `start_run` behavior.
+
+
+#### Checkpoints and logged artifacts (experiments focus)
+
+
+| Mechanism                                                 | Role                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `mlflow.pytorch.log_model` (in a callback or after `fit`) | Log a `torch.nn.Module` as an MLflow model artifact.                     |
+| `MLFlowLogger(log_model=...)`                             | Controls whether Lightning uploads model/checkpoint artifacts to MLflow. |
+
+
+If you use both a checkpoint callback and `mlflow.pytorch.log_model`, you can log **one** “best” model from the best checkpoint after training to avoid duplicating every intermediate file as a large artifact.
+
+#### What appears in MLflow
+
+
+| Source                                           | In MLflow                                                             |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
+| `MLFlowLogger`                                   | A run in the given experiment, linked to the tracking URI.            |
+| `self.log(...)`                                  | Metrics (names and step/epoch as configured).                         |
+| `save_hyperparameters`                           | Parameters (unless ignored).                                          |
+| `enable_system_metrics_logging` / custom monitor | System metrics (OS/resource), when supported for that run.            |
+| `mlflow.pytorch.log_model` (if used)             | Artifacts under the chosen `artifact_path` (e.g. `MLmodel`, weights). |
+
+
+#### Practical tips (Lightning)
+
+1. **One run per `trainer.fit`:** the logger usually creates a single run; metrics from that run belong together.
+2. **Resume training:** use Lightning’s checkpointing (`ckpt_path`) rather than depending on MLflow for optimizer state; MLflow remains for **tracking**, not the primary source of resumable training state unless you build that flow explicitly.
+3. **Reproducibility:** log git commit, data version, or seeds as extra parameters (manual `mlflow.log_param` in setup code, or hyperparameters) if you need them in the run metadata.
+
+#### Quick reference wiring (Lightning)
+
+```python
+import mlflow
+import lightning.pytorch as pl
+from lightning.pytorch.loggers import MLFlowLogger
+
+mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_experiment("my_experiment")
+mlflow.enable_system_metrics_logging()  # optional; verify for your MLflow + logger combo
+
+mlf_logger = MLFlowLogger(
+    experiment_name="my_experiment",
+    tracking_uri="http://localhost:5000",
+    run_name="try-1",
+    log_model=False,
+)
+
+trainer = pl.Trainer(max_epochs=10, logger=mlf_logger, accelerator="auto", devices=1)
+trainer.fit(lit_module)  # lit_module: pl.LightningModule
+```
+
+Minimal contract: **config → logger → `Trainer` → `fit`**, with **metrics and params** flowing through `**self.log`** and `**save_hyperparameters**` on the `LightningModule`.
+
+### 2.6 Configure MLflow and Hugging Face autologging
+
+Call this after parsing arguments and before constructing the trainer (order may matter for autolog hooks):
+
+```python
+mlflow.set_tracking_uri(args.mlflow_uri)
+mlflow.set_experiment(args.mlflow_experiment)
+mlflow.transformers.autolog(log_models=False)
+```
+
+Note: prevent using `log_models=true` with HuggingFace Trainer as it may result in a deadlock (freezing the train script) while trying to save the model
+
+### 2.7 Send training metrics to MLflow from `Trainer`
+
+In your `TrainingArguments`, set:
+
+```python
+report_to="mlflow",
+```
+
+so the Hugging Face `Trainer` streams scalars and related logs to the active MLflow run.
+
+### 2.8 Wrap training in an MLflow run and log the final model bundle
+
+Place `trainer.train()` inside `mlflow.start_run`. Log the full Transformers bundle only from the **global main process** to avoid duplicate uploads in distributed training:
+
+```python
+with mlflow.start_run(run_name=args.mlflow_run_group, log_system_metrics=True):
+    trainer.train()
+    if trainer.is_world_process_zero():
+        print("Uploading final model to MLflow server...")
+        mlflow.transformers.log_model(
+            transformers_model={"model": model, "tokenizer": tokenizer},
+            artifact_path="final_model",
+        )
+```
+
+For **pure experiment tracking**, the critical parts are `run_name`, `log_system_metrics=True`, `report_to="mlflow"`, and `autolog`. Logging the full model is optional depending on policy and storage.
+
+### 2.9 Launch training with the new arguments
+
+Set the environment variables (for example from `current_uri.env` and your own names), then invoke your entrypoint (your training script):
+
+```bash
+python scripts/train.py \
+  --mlflow_uri "$MLFLOW_TRACKING_URI" \
+  --mlflow_experiment "$MLFLOW_EXPERIMENT_NAME" \
+  --mlflow_run_group "$MLFLOW_RUN_GROUP"
+```
+
+### 2.10 Adding custom metrics (optional)
+
+```python
+import mlflow
+
+with mlflow.start_run():
+    # ... model training ...
+    accuracy = 0.95
+    f1_score = 0.92
+    mlflow.log_metric("accuracy", accuracy)
+    mlflow.log_metrics({"f1_score": f1_score, "precision": 0.93})
+```
+
+### 2.11 Run grouping note (important for sweeps and batches)
+
+MLflow does not expose a single first-class object called “run group” in the CLI. Teams usually implement **grouping** via **tags**, **run name**, or **parent/child runs**. In this repository’s training jobs, `--mlflow_run_group` is passed as `run_name` so all jobs in one logical batch share the same display label — useful when comparing runs in exports or JSON.
+
+**Reproducibility checklist** when reviewing a group of runs:
+
+1. Same **code**: tag or param with **git SHA** (or container image digest).
+2. Same **data**: artifact or tag pointing to dataset version / snapshot ID.
+3. Same **environment**: logged `requirements.txt` or conda env under artifacts.
+4. **Params** that actually control the sweep (learning rate, seed, etc.).
 
 ---
 
@@ -1050,16 +1063,3 @@ Together: **log → inspect via CLI or JSON → plot raw metric files with `uplo
 Replace example paths and run IDs with values from your environment.
 
 ---
-
-## FAQs (frequently asked questions):
-
-1. **Why as a Shaheen 3 cluster user must I migrate to MLflow?**
-  See **Part 1**: **1** opening framing, **1.2** executive summary table, detailed comparison **1.4**, **1.6** (why W&B FOMO does not apply).
-2. **Why can’t I use MLflow UI? Is the CLI a good replacement? Can it do everything the UI does?**
-  See **3.1**: UI often blocked or inconvenient on air-gapped/SSH-first systems; **no core “tail” command** — structured history is metrics/params/artifacts. **CLI + exports + terminal plots** are the **practical** monitor here; browser compare views are optional when policy allows — not the baseline on Shaheen 3.
-3. **Why do we need a CLI plotting tool? What is YouPlot? How do I use and integrate it?**
-  See **Part 4** in full: rationale (**4.1**), definition (**4.2–4.4**), `mlruns` layout (**4.5**), `uplot line`, `watch`, relative paths `**--fmt xy**` (**4.6–4.8**), combining with `mlflow runs describe` (**4.9**), and integration table (**4.10–4.11**).
-
----
-
-*End of consolidated guide.*
