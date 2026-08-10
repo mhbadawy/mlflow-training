@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Ouputs
+dcgm/
+logs/
+mlartifacts/
+bloom-*
+*.out
+.mlflow/
+mlruns/
+cpu_memory/
+gpu_memory/
